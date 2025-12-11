@@ -3,29 +3,35 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { createClient } = require('@supabase/supabase-js');
 
-// Настройки (замените на свои!)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const YANDEX_API_KEY = process.env.YANDEX_API_KEY;
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 module.exports = async (req, res) => {
     try {
+        // 1. Читаем секреты ТОЛЬКО здесь, внутри функции
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_KEY;
+        const YANDEX_API_KEY = process.env.YANDEX_API_KEY;
+        
+        // 2. Проверяем, что секреты загрузились
+        if (!supabaseUrl || !supabaseKey || !YANDEX_API_KEY) {
+            throw new Error('Не настроены ключи (SUPABASE_URL, SUPABASE_KEY, YANDEX_API_KEY) в Vercel.');
+        }
+        
+        // 3. Только теперь создаём клиент Supabase
+        const supabase = createClient(supabaseUrl, supabaseKey);
+        
         console.log('Начинаем сбор данных...');
         
-        // 1. Собираем пиццерии с Яндекс.Карт
-        const yandexPizza = await getYandexPizzaData();
+        // 4. Собираем пиццерии с Яндекс.Карт
+        const yandexPizza = await getYandexPizzaData(YANDEX_API_KEY);
         
-        // 2. Собираем промокоды
+        // 5. Собираем промокоды
         const promocodes = await getPromocodes();
         
-        // 3. Обновляем базу данных
-        await updateDatabase(yandexPizza, promocodes);
+        // 6. Обновляем базу данных
+        await updateDatabase(supabase, yandexPizza, promocodes);
         
         res.status(200).json({ 
             success: true, 
-            message: 'Данные обновлены!',
+            message: 'Данные успешно обновлены!',
             updated: yandexPizza.length 
         });
         
@@ -35,13 +41,14 @@ module.exports = async (req, res) => {
     }
 };
 
-async function getYandexPizzaData() {
+// Функция сбора данных с Яндекс.Карт
+async function getYandexPizzaData(apiKey) {
     const results = [];
     
     try {
         // Поиск пиццерий в Сыктывкаре через Яндекс.Карты API
         const response = await axios.get(
-            `https://search-maps.yandex.ru/v1/?apikey=${YANDEX_API_KEY}&text=пицца+Сыктывкар&type=biz&lang=ru_RU&results=20`
+            `https://search-maps.yandex.ru/v1/?apikey=${apiKey}&text=пицца+Сыктывкар&type=biz&lang=ru_RU&results=20`
         );
         
         if (response.data.features) {
@@ -64,7 +71,9 @@ async function getYandexPizzaData() {
                         rating: place.properties.rating,
                         reviews: place.properties.reviews,
                         yandex_link: `https://yandex.ru/maps/?text=${encodeURIComponent(name + ' Сыктывкар')}`,
-                        price: price
+                        price: price,
+                        delivery_time: '30-50 мин', // Примерное время
+                        website_link: null // Можно заполнить позже
                     });
                 }
             }
@@ -76,10 +85,10 @@ async function getYandexPizzaData() {
     return results;
 }
 
+// Функция для получения примерной цены
 async function getPizzaPrice(placeName) {
-    // Пробуем найти цену в открытых источниках
     const pricePatterns = {
-        'Додо': 349,  // Базовая цена Додо
+        'Додо': 349,
         'Папа Джонс': 399,
         'Пицца Суши': 299,
         'Теремок': 250
@@ -91,29 +100,21 @@ async function getPizzaPrice(placeName) {
         }
     }
     
-    // Если не нашли - возвращаем случайную цену в диапазоне
+    // Если не нашли - возвращаем случайную цену
     return 300 + Math.floor(Math.random() * 200);
 }
 
+// Функция сбора промокодов (упрощённая версия)
 async function getPromocodes() {
     const promocodes = [];
     
     try {
-        // Пример сбора промокодов с сайта
-        const { data } = await axios.get('https://promokodi.ru/category/pitstsa/');
-        const $ = cheerio.load(data);
+        // Упрощённый пример - возвращаем тестовые промокоды
+        promocodes.push(
+            { code: 'PIZZA2024', description: 'Скидка 20% на первый заказ' },
+            { code: 'SYKTYPIZZA', description: 'Бесплатная доставка' }
+        );
         
-        $('.coupon-item').each((i, elem) => {
-            const title = $(elem).find('.coupon-title').text();
-            const code = $(elem).find('.coupon-code').text();
-            
-            if (title && code && title.includes('пицц')) {
-                promocodes.push({
-                    code: code.trim(),
-                    description: title.trim()
-                });
-            }
-        });
     } catch (error) {
         console.log('Не удалось собрать промокоды:', error.message);
     }
@@ -121,31 +122,40 @@ async function getPromocodes() {
     return promocodes;
 }
 
-async function updateDatabase(pizzaData, promocodes) {
+// Функция обновления базы данных
+async function updateDatabase(supabaseClient, pizzaData, promocodes) {
     for (const pizza of pizzaData) {
-        // Проверяем, есть ли уже такая пиццерия
-        const { data: existing } = await supabase
-            .from('pizza_places')
-            .select('id')
-            .eq('name', pizza.name)
-            .limit(1);
-        
-        if (existing && existing.length > 0) {
-            // Обновляем существующую
-            await supabase
+        try {
+            // Проверяем, есть ли уже такая пиццерия
+            const { data: existing } = await supabaseClient
                 .from('pizza_places')
-                .update({
-                    price: pizza.price,
-                    rating: pizza.rating,
-                    reviews: pizza.reviews,
-                    last_updated: new Date()
-                })
-                .eq('name', pizza.name);
-        } else {
-            // Добавляем новую
-            await supabase
-                .from('pizza_places')
-                .insert([pizza]);
+                .select('id')
+                .eq('name', pizza.name)
+                .limit(1);
+            
+            if (existing && existing.length > 0) {
+                // Обновляем существующую
+                await supabaseClient
+                    .from('pizza_places')
+                    .update({
+                        price: pizza.price,
+                        rating: pizza.rating,
+                        reviews: pizza.reviews,
+                        address: pizza.address,
+                        last_updated: new Date().toISOString()
+                    })
+                    .eq('name', pizza.name);
+            } else {
+                // Добавляем новую
+                await supabaseClient
+                    .from('pizza_places')
+                    .insert([{
+                        ...pizza,
+                        last_updated: new Date().toISOString()
+                    }]);
+            }
+        } catch (dbError) {
+            console.error(`Ошибка при обработке пиццерии ${pizza.name}:`, dbError.message);
         }
     }
 }
