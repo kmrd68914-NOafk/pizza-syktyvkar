@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍕 Пицца-детектив Сыктывкар | Автоцены</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Arial', sans-serif; }
+        body { background: #fff5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { text-align: center; padding: 40px 0; }
+        h1 { color: #e74c3c; font-size: 2.5rem; margin-bottom: 10px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .stats-bar { background: white; padding: 15px; border-radius: 10px; margin: 20px 0; display: flex; justify-content: space-around; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .stat-item { text-align: center; }
+        .stat-number { font-size: 1.5rem; font-weight: bold; color: #e74c3c; }
+        .stat-label { font-size: 0.9rem; color: #666; }
+        #pizzaList { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; margin: 30px 0; }
+        .pizza-card { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); transition: transform 0.3s; }
+        .pizza-card:hover { transform: translateY(-5px); }
+        .pizza-name { font-size: 1.3rem; color: #2c3e50; margin-bottom: 10px; }
+        .pizza-price { font-size: 2rem; color: #27ae60; font-weight: bold; margin: 10px 0; }
+        .pizza-rating { color: #f39c12; margin: 5px 0; }
+        .pizza-address { color: #7f8c8d; margin: 5px 0; font-size: 0.9rem; }
+        .promo-badge { background: #ff6b6b; color: white; padding: 3px 10px; border-radius: 20px; font-size: 0.8rem; display: inline-block; margin: 5px 0; }
+        .buttons { display: flex; gap: 10px; margin-top: 15px; }
+        .btn { padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-flex; align-items: center; gap: 5px; }
+        .btn-yandex { background: #ffcc00; color: #000; }
+        .btn-order { background: #e74c3c; color: white; }
+        .update-info { text-align: center; color: #95a5a6; margin: 20px 0; }
+        .loader { border: 5px solid #f3f3f3; border-top: 5px solid #e74c3c; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @media (max-width: 768px) { #pizzaList { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-pizza-slice"></i> Пицца-детектив Сыктывкар</h1>
+            <p class="subtitle">Самые свежие цены на пиццу. Обновляется автоматически каждый день.</p>
+        </header>
+
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-number" id="totalPlaces">0</div>
+                <div class="stat-label">пиццерий в базе</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="avgPrice">0</div>
+                <div class="stat-label">средняя цена</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="lastUpdate">...</div>
+                <div class="stat-label">обновлено</div>
+            </div>
+        </div>
+
+        <div id="loading" class="loader"></div>
+
+        <div id="pizzaList"></div>
+
+        <div class="update-info">
+            <p>📅 Данные обновляются автоматически в 8:00 каждый день</p>
+            <p>🔍 Информация собирается из открытых источников</p>
+        </div>
+    </div>
+
+    <script>
+        // Конфигурация - ЗАМЕНИТЕ ЭТИ ДАННЫЕ НА СВОИ!
+        const SUPABASE_URL = 'https://niublpflhtofhreuyppp.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pdWJscGZsaHRvZmhyZXV5cHBwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ4ODUzMjIsImV4cCI6MjA4MDQ2MTMyMn0.N19VOQgCoKoRbDbeRz7cDBwftwvHv6OE-U5m-__2LwI';
+
+        // Загружаем данные при открытии страницы
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadPizzaData();
+            document.getElementById('loading').style.display = 'none';
+        });
+
+        async function loadPizzaData() {
+            try {
+                // Загружаем данные из Supabase
+                const response = await fetch(`${SUPABASE_URL}/rest/v1/pizza_places?select=*&order=price.asc`, {
+                    headers: {
+                        'apikey': SUPABASE_KEY,
+                        'Authorization': `Bearer ${SUPABASE_KEY}`
+                    }
+                });
+                
+                const pizzaData = await response.json();
+                
+                // Обновляем статистику
+                document.getElementById('totalPlaces').textContent = pizzaData.length;
+                
+                // Считаем среднюю цену
+                if (pizzaData.length > 0) {
+                    const avgPrice = Math.round(
+                        pizzaData.reduce((sum, item) => sum + (item.price || 0), 0) / pizzaData.length
+                    );
+                    document.getElementById('avgPrice').textContent = avgPrice + '₽';
+                }
+                
+                // Показываем список
+                renderPizzaList(pizzaData);
+            } catch (error) {
+                console.error('Ошибка загрузки:', error);
+                document.getElementById('pizzaList').innerHTML = 
+                    '<p style="text-align:center;color:red;">Ошибка загрузки данных. Попробуйте позже.</p>';
+            }
+        }
+
+        function renderPizzaList(places) {
+            const container = document.getElementById('pizzaList');
+            
+            if (places.length === 0) {
+                container.innerHTML = '<p style="text-align:center;">Нет данных. Первое обновление будет через 24 часа.</p>';
+                return;
+            }
+            
+            container.innerHTML = places.map(place => `
+                <div class="pizza-card">
+                    <div class="pizza-name">${place.name}</div>
+                    <div class="pizza-price">${place.price ? place.price + '₽' : 'Цена не указана'}</div>
+                    
+                    ${place.rating ? `
+                        <div class="pizza-rating">
+                            <i class="fas fa-star"></i> ${place.rating} 
+                            ${place.reviews ? `(${place.reviews} отзывов)` : ''}
+                        </div>
+                    ` : ''}
+                    
+                    ${place.address ? `
+                        <div class="pizza-address">
+                            <i class="fas fa-map-marker-alt"></i> ${place.address}
+                        </div>
+                    ` : ''}
+                    
+                    ${place.delivery_time ? `
+                        <div class="pizza-address">
+                            <i class="fas fa-clock"></i> Доставка: ${place.delivery_time}
+                        </div>
+                    ` : ''}
+                    
+                    ${place.promocode ? `
+                        <div class="promo-badge">
+                            <i class="fas fa-gift"></i> Промокод: ${place.promocode}
+                        </div>
+                    ` : ''}
+                    
+                    <div class="buttons">
+                        ${place.yandex_link ? `
+                            <a href="${place.yandex_link}" target="_blank" class="btn btn-yandex">
+                                <i class="fas fa-map"></i> Яндекс.Карты
+                            </a>
+                        ` : ''}
+                        
+                        ${place.website_link ? `
+                            <a href="${place.website_link}" target="_blank" class="btn btn-order">
+                                <i class="fas fa-shopping-cart"></i> Заказать
+                            </a>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
